@@ -1,0 +1,354 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  DOCTOR
+  PATIENT
+}
+
+enum AppointmentStatus {
+  REQUESTED
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String
+  name          String
+  role          Role
+  image         String?
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // Relations
+  patientProfile  Patient?
+  doctorProfile   Doctor?
+  auditLogs       AuditLog[]
+  accounts        Account[]
+  sessions        Session[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Patient {
+  id            String    @id @default(cuid())
+  userId        String    @unique
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phone         String
+  dateOfBirth   DateTime?
+  bloodType     String?
+  allergies     String[]
+  address       String?
+  emergencyContact String?
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  appointments  Appointment[]
+  medicalRecords MedicalRecord[]
+  invoices      Invoice[]
+}
+
+model Clinic {
+  id            String    @id @default(cuid())
+  name          String
+  address       String
+  phone         String
+  email         String?
+  city          String
+  state         String?
+  zipCode       String?
+  country       String    @default("USA")
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  doctors       DoctorClinic[]
+  appointments  Appointment[]
+  
+  @@index([city, state])
+}
+
+model Doctor {
+  id            String    @id @default(cuid())
+  userId        String    @unique
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  specialty     String
+  licenseNumber String    @unique
+  rating        Float     @default(0)
+  reviewCount   Int       @default(0)
+  price         Decimal   @db.Decimal(10, 2)
+  bio           String?   @db.Text
+  experience    Int?      // years
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  clinics       DoctorClinic[]
+  appointments  Appointment[]
+  availability  DoctorAvailability[]
+  medicalRecords MedicalRecord[]
+}
+
+model DoctorClinic {
+  id            String    @id @default(cuid())
+  doctorId      String
+  doctor        Doctor    @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  clinicId      String
+  clinic        Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  
+  isPrimary     Boolean   @default(false)
+  joinedAt      DateTime  @default(now())
+  
+  @@unique([doctorId, clinicId])
+  @@index([doctorId])
+  @@index([clinicId])
+}
+
+model Appointment {
+  id            String    @id @default(cuid())
+  patientId     String
+  patient       Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctorId      String
+  doctor        Doctor    @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  clinicId      String?
+  clinic        Clinic?   @relation(fields: [clinicId], references: [id])
+  
+  date          DateTime  @db.Date
+  startTime     DateTime
+  endTime       DateTime
+  status        AppointmentStatus @default(REQUESTED)
+  type          String    // "Check-up", "Follow-up", "Consultation"
+  notes         String?   @db.Text
+  cancelReason  String?
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  invoice       Invoice?
+  
+  @@index([doctorId, date, status])
+  @@index([patientId, status])
+  @@index([clinicId, date])
+  @@index([startTime, endTime])
+}
+
+model DoctorAvailability {
+  id            String    @id @default(cuid())
+  doctorId      String
+  doctor        Doctor    @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  clinicId      String?   // Optional: availability at specific clinic
+  
+  // Recurring schedule
+  dayOfWeek     Int       // 0 = Sunday, 6 = Saturday
+  startTime     String    // "09:00"
+  endTime       String    // "17:00"
+  isAvailable   Boolean   @default(true)
+  
+  // One-time overrides
+  specificDate  DateTime? @db.Date
+  isException   Boolean   @default(false) // true for one-time changes
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  @@unique([doctorId, dayOfWeek, startTime, specificDate])
+  @@index([doctorId, isAvailable])
+  @@index([specificDate])
+}
+
+model Invoice {
+  id            String    @id @default(cuid())
+  appointmentId String    @unique
+  appointment   Appointment @relation(fields: [appointmentId], references: [id])
+  patientId     String
+  patient       Patient   @relation(fields: [patientId], references: [id])
+  
+  invoiceNumber String    @unique
+  amount        Decimal   @db.Decimal(10, 2)
+  tax           Decimal   @db.Decimal(10, 2) @default(0)
+  total         Decimal   @db.Decimal(10, 2)
+  
+  status        PaymentStatus @default(PENDING)
+  paidAt        DateTime?
+  
+  // Stripe integration
+  stripePaymentIntentId String?
+  stripeInvoiceId       String?
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  payments      Payment[]
+  
+  @@index([patientId, status])
+  @@index([invoiceNumber])
+}
+
+model Payment {
+  id            String    @id @default(cuid())
+  invoiceId     String
+  invoice       Invoice   @relation(fields: [invoiceId], references: [id])
+  
+  amount        Decimal   @db.Decimal(10, 2)
+  method        String    // "card", "cash", "insurance"
+  status        PaymentStatus @default(PENDING)
+  
+  // Stripe
+  stripeChargeId String?
+  stripeRefundId String?
+  
+  transactionId String?   @unique
+  paidAt        DateTime?
+  refundedAt    DateTime?
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  @@index([invoiceId])
+  @@index([status])
+}
+
+model MedicalRecord {
+  id            String    @id @default(cuid())
+  patientId     String
+  patient       Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctorId      String
+  doctor        Doctor    @relation(fields: [doctorId], references: [id])
+  
+  visitDate     DateTime
+  diagnosis     String
+  prescription  String[]
+  notes         String?   @db.Text
+  attachments   String[]  // URLs to files
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  @@index([patientId, visitDate])
+  @@index([doctorId])
+}
+
+model NotificationQueue {
+  id            String    @id @default(cuid())
+  recipientEmail String?
+  recipientPhone String?
+  
+  type          String    // "email", "sms", "push"
+  template      String    // "appointment_confirmation", "reminder", etc.
+  subject       String?
+  message       String    @db.Text
+  data          Json?     // Template variables
+  
+  status        NotificationStatus @default(PENDING)
+  attempts      Int       @default(0)
+  maxAttempts   Int       @default(3)
+  
+  scheduledFor  DateTime  @default(now())
+  sentAt        DateTime?
+  failedAt      DateTime?
+  error         String?   @db.Text
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  @@index([status, scheduledFor])
+  @@index([type, status])
+}
+
+model AuditLog {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action        String    // "APPOINTMENT_CREATED", "USER_UPDATED", etc.
+  resource      String?   // Resource type: "appointment", "user", etc.
+  resourceId    String?   // ID of the affected resource
+  metadata      Json?     // Additional context
+  ipAddress     String?
+  userAgent     String?
+  
+  createdAt     DateTime  @default(now())
+  
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@index([resource, resourceId])
+}
+
+model Specialty {
+  id            String    @id @default(cuid())
+  name          String    @unique
+  description   String?
+  icon          String?
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model SystemSettings {
+  id            String    @id @default(cuid())
+  key           String    @unique
+  value         String    @db.Text
+  description   String?
+  
+  updatedAt     DateTime  @updatedAt
+}
